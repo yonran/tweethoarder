@@ -287,6 +287,11 @@ tags
 .history
 .ionide
 
+### Archive tooling runtime artifacts (see ARCHIVE_TOOLS.md) ###
+# Per-run logs and the conversation-fetch checkpoint (user-specific state)
+*.log
+conversations_done.txt
+
 # End of https://www.toptal.com/developers/gitignore/api/linux,macos,visualstudiocode,vim,python,jupyternotebooks,venv,virtualenv
 
 # TDD-Guard
