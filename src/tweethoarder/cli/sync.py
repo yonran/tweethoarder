@@ -326,7 +326,7 @@ async def sync_likes_async(
 
         async def refresh_and_get_likes_id() -> str:
             """Refresh query IDs and return the new Likes ID."""
-            new_ids: dict[str, str] = await refresh_query_ids(http_client, targets={"Likes"})
+            new_ids: dict[str, str] = await refresh_query_ids(http_client, targets={"Likes"}, cookies=cookies)
             store.save(new_ids)
             return new_ids["Likes"]
 
@@ -487,7 +487,7 @@ async def sync_bookmarks_async(
 
         async def refresh_and_get_bookmarks_id() -> str:
             """Refresh query IDs and return the new Bookmarks ID."""
-            new_ids: dict[str, str] = await refresh_query_ids(http_client, targets={"Bookmarks"})
+            new_ids: dict[str, str] = await refresh_query_ids(http_client, targets={"Bookmarks"}, cookies=cookies)
             store.save(new_ids)
             return new_ids["Bookmarks"]
 
@@ -1216,11 +1216,23 @@ async def sync_feed_async(
     progress: Progress | None = None,
     full: bool = False,
 ) -> dict[str, Any]:
-    """Sync home timeline (Following feed) from Twitter to local database."""
+    """Sync home timeline (Following feed) from Twitter to local database.
+
+    Incremental strategy: on each call we pass the cursor-top saved from the
+    previous run.  Twitter's HomeLatestTimeline treats a cursor-top as a "give
+    me everything newer than this point" marker, so we only receive genuinely
+    new tweets rather than re-fetching the whole visible window every time.
+
+    On the very first run (no saved cursor), we fall back to a full window
+    fetch and use the hours cutoff to bound how far back we go.
+    """
+    from datetime import UTC, datetime, timedelta
+
     from tweethoarder.client.timelines import (
         fetch_home_timeline_page,
         parse_home_timeline_response,
     )
+    from tweethoarder.storage.checkpoint import SyncCheckpoint
 
     init_database(db_path)
 
@@ -1233,38 +1245,107 @@ async def sync_feed_async(
     store = QueryIdStore(cache_path)
     query_id = get_query_id_with_fallback(store, "HomeLatestTimeline")
 
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     synced_count = 0
     headers = client.get_base_headers()
+    checkpoint = SyncCheckpoint(db_path)
+
+    # Load the cursor-top saved at the end of the last successful sync.
+    # Passing cursor-top to HomeLatestTimeline returns only tweets newer than
+    # the last sync position — the correct "what's new" query.
+    saved = checkpoint.load("feed")
+    start_cursor: str | None = None if (full or saved is None) else saved.cursor
 
     async with httpx.AsyncClient(headers=headers) as http_client:
 
         async def refresh_and_get_home_timeline_id() -> str:
             """Refresh query IDs and return the new HomeLatestTimeline ID."""
             new_ids: dict[str, str] = await refresh_query_ids(
-                http_client, targets={"HomeLatestTimeline"}
+                http_client, targets={"HomeLatestTimeline"}, cookies=cookies
             )
             store.save(new_ids)
             return new_ids["HomeLatestTimeline"]
 
-        response = await fetch_home_timeline_page(
-            http_client, query_id, on_query_id_refresh=refresh_and_get_home_timeline_id
-        )
-        entries, _ = parse_home_timeline_response(response)
+        # cursor-top from response: save after this run for next incremental call
+        # cursor-bottom from response: use within this session to page backward
+        latest_cursor_top: str | None = None
+        cursor: str | None = start_cursor
+        from datetime import datetime as dt
 
-        for entry in entries:
-            raw_tweet = entry["tweet"]
-            sort_index = entry.get("sort_index")
-            tweet_data = extract_tweet_data(raw_tweet)
-            if tweet_data:
-                # Check for duplicate if not doing full sync
-                if not full and tweet_in_collection(db_path, tweet_data["id"], "feed"):
+        while synced_count < count:
+            response = await fetch_home_timeline_page(
+                http_client,
+                query_id,
+                cursor,
+                on_query_id_refresh=refresh_and_get_home_timeline_id,
+            )
+            entries, cursor_top, cursor_bottom = parse_home_timeline_response(response)
+
+            # Always keep the newest cursor-top from the first page — it marks
+            # the high-water point for the next incremental run.
+            if cursor_top and latest_cursor_top is None:
+                latest_cursor_top = cursor_top
+
+            if not entries:
+                break
+
+            page_has_fresh = False
+            for entry in entries:
+                if synced_count >= count:
                     break
-
+                raw_tweet = entry["tweet"]
+                sort_index = entry.get("sort_index")
+                tweet_data = extract_tweet_data(raw_tweet)
+                if tweet_data is None:
+                    continue
+                tweet_time_str = tweet_data.get("created_at", "")
+                # Hours cutoff applies only on full-window (no-cursor) fetches.
+                # In cursor-top mode the API already filters to post-cursor content,
+                # so skipping old tweets here would silently drop real new content
+                # if the previous sync was >hours ago (e.g. service outage).
+                if tweet_time_str and not full and start_cursor is None:
+                    tweet_time = dt.fromisoformat(tweet_time_str)
+                    if tweet_time.tzinfo is None:
+                        tweet_time = tweet_time.replace(tzinfo=UTC)
+                    if tweet_time >= cutoff:
+                        page_has_fresh = True
+                    else:
+                        continue
+                if not full and tweet_in_collection(db_path, tweet_data["id"], "feed"):
+                    continue
                 save_tweet(db_path, tweet_data)
                 add_to_collection(db_path, tweet_data["id"], "feed", sort_index=sort_index)
                 synced_count += 1
 
-    return {"synced_count": synced_count}
+            # When using a saved cursor-top, Twitter only returns the new
+            # tweets — stop after this single page (no backward pagination).
+            if start_cursor is not None:
+                break
+
+            # On a full / first-run fetch, paginate backward via cursor-bottom
+            # until the page contains no tweets within the hours window.
+            cursor = cursor_bottom
+            if (not full and not page_has_fresh) or not cursor:
+                break
+
+    # Persist the cursor-top so the next call requests only new tweets.
+    if latest_cursor_top:
+        checkpoint.save("feed", cursor=latest_cursor_top, last_tweet_id="", sort_index_counter=0)
+
+    # Fetch the most recent tweet time for reporting when 0 new tweets.
+    latest_tweet_at: str | None = None
+    if synced_count == 0:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(db_path) as _conn:
+            _row = _conn.execute(
+                "SELECT MAX(t.created_at) FROM tweets t "
+                "JOIN collections c ON t.id=c.tweet_id "
+                "WHERE c.collection_type='feed'"
+            ).fetchone()
+            if _row and _row[0]:
+                latest_tweet_at = _row[0]
+
+    return {"synced_count": synced_count, "latest_tweet_at": latest_tweet_at}
 
 
 @app.command()
@@ -1280,4 +1361,140 @@ def feed(
     db_path = get_data_dir() / "tweethoarder.db"
 
     result = asyncio.run(sync_feed_async(db_path=db_path, hours=hours, full=full))
-    typer.echo(f"Synced {result['synced_count']} feed tweets.")
+    n = result["synced_count"]
+    if n > 0:
+        typer.echo(f"Synced {n} feed tweets.")
+    else:
+        latest = result.get("latest_tweet_at", "")
+        if latest:
+            typer.echo(f"Feed up to date (latest tweet: {latest[:16]} UTC).")
+        else:
+            typer.echo("Feed up to date (no tweets in DB).")
+
+
+async def sync_list_async(
+    db_path: Path,
+    list_id: str,
+    list_name: str = "",
+    hours: int = 24,
+    count: int | float = float("inf"),
+    full: bool = False,
+) -> dict[str, Any]:
+    """Sync tweets from a Twitter List to the local database.
+
+    Tweets are stored under collection_type='list:{list_id}' so that
+    each list has its own namespace and a tweet can appear in multiple lists
+    without primary-key conflicts.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tweethoarder.client.timelines import (
+        fetch_list_timeline_page,
+        parse_list_timeline_response,
+    )
+
+    init_database(db_path)
+
+    cookies = resolve_cookies()
+    if not cookies:
+        raise ValueError("No cookies found. Please log in to Twitter in your browser.")
+
+    client = TwitterClient(cookies=cookies)
+    cache_path = get_config_dir() / "query-ids-cache.json"
+    store = QueryIdStore(cache_path)
+    query_id = get_query_id_with_fallback(store, "ListLatestTweetsTimeline")
+    if not query_id:
+        raise ValueError(
+            "ListLatestTweetsTimeline query ID not found. Run `tweethoarder refresh-ids` first."
+        )
+
+    collection_type = f"list:{list_id}"
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    synced_count = 0
+    headers = client.get_base_headers()
+
+    async with httpx.AsyncClient(headers=headers) as http_client:
+
+        async def refresh_and_get_list_id() -> str:
+            new_ids: dict[str, str] = await refresh_query_ids(
+                http_client, targets={"ListLatestTweetsTimeline"}, cookies=cookies
+            )
+            store.save(new_ids)
+            return new_ids["ListLatestTweetsTimeline"]
+
+        cursor: str | None = None
+        while synced_count < count:
+            response = await fetch_list_timeline_page(
+                http_client,
+                query_id,
+                list_id,
+                cursor,
+                on_query_id_refresh=refresh_and_get_list_id,
+            )
+            entries, cursor = parse_list_timeline_response(response)
+
+            if not entries:
+                break
+
+            hit_cutoff = False
+            for entry in entries:
+                if synced_count >= count:
+                    break
+                raw_tweet = entry["tweet"]
+                sort_index = entry.get("sort_index")
+                tweet_data = extract_tweet_data(raw_tweet)
+                if tweet_data is None:
+                    continue
+                # Stop pagination once tweets are older than the hours cutoff
+                tweet_time_str = tweet_data.get("created_at", "")
+                if tweet_time_str:
+                    from datetime import datetime as dt
+                    tweet_time = dt.fromisoformat(tweet_time_str)
+                    if tweet_time.tzinfo is None:
+                        tweet_time = tweet_time.replace(tzinfo=UTC)
+                    if tweet_time < cutoff:
+                        hit_cutoff = True
+                        break
+                if not full and tweet_in_collection(db_path, tweet_data["id"], collection_type):
+                    hit_cutoff = True
+                    break
+                save_tweet(db_path, tweet_data)
+                quoted = extract_quoted_tweet(raw_tweet)
+                if quoted:
+                    save_tweet(db_path, quoted)
+                add_to_collection(db_path, tweet_data["id"], collection_type, sort_index=sort_index)
+                synced_count += 1
+
+            if hit_cutoff or not cursor:
+                break
+
+    return {"synced_count": synced_count, "list_id": list_id, "list_name": list_name}
+
+
+@app.command(name="list")
+def list_cmd(
+    list_id: str = typer.Argument(..., help="Twitter List ID (numeric, from the list URL)."),
+    name: str = typer.Option("", "--name", "-n", help="Optional display name for this list."),
+    hours: int = typer.Option(
+        24, "--hours", "-h", help="Sync tweets from the last N hours."
+    ),
+    full: bool = typer.Option(
+        False, "--full", help="Force complete resync, ignoring existing tweets."
+    ),
+) -> None:
+    """Sync tweets from a Twitter List.
+
+    The list ID is the numeric ID from the list URL:
+      https://x.com/i/lists/1234567890  →  list_id=1234567890
+
+    Tweets are stored under collection_type='list:<list_id>' so the same tweet
+    can appear in multiple lists and in the home feed without conflicts.
+    """
+    from tweethoarder.config import get_data_dir
+
+    db_path = get_data_dir() / "tweethoarder.db"
+    result = asyncio.run(
+        sync_list_async(db_path=db_path, list_id=list_id, list_name=name, hours=hours, full=full)
+    )
+    label = f" ({result['list_name']})" if result["list_name"] else ""
+    typer.echo(f"Synced {result['synced_count']} tweets from list {list_id}{label}.")
