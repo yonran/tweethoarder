@@ -43,6 +43,10 @@ uv run tweethoarder sync bookmarks --all
 # 2. Fetch conversation context (ancestors + downstream). Resumable.
 uv run python fetch_conversations.py has_parent tweet reply bookmark
 
+# 2b. Fetch full text of X Articles (long-form posts) into the `articles` table.
+#     Timelines only return a link/title; the body needs TweetDetail. Resumable.
+uv run python fetch_articles.py like bookmark
+
 # 3. Download all media locally (images, posters, low-res videos, avatars)
 uv run python download_media.py
 
@@ -61,6 +65,7 @@ uv run python build_archive.py
 |------|---------|
 | `media_utils.py` | Shared: extract media (image/poster/lowest-bitrate mp4) from a tweet's `raw_json`; map any media URL to a deterministic local filename. Imported by the downloader and builder so they agree on paths. |
 | `fetch_conversations.py` | Fetch the full conversation (ancestors + reply tree) for a set of focal tweets via X's `TweetDetail` endpoint in **conversation mode**. Resumable + per-call timeout. |
+| `fetch_articles.py` | Fetch the full body of X Articles linked from saved tweets (incl. quote tweets of an article) into an `articles` table (`title`, `plain_text`, Draft.js `content_state_json`) via `TweetDetail` with the article field toggles. Skips already-fetched (`--refetch` to redo). Search: `select tweet_id, title from articles where plain_text like '%...%'`. |
 | `fetch_ancestors.py` | Older/narrower variant: conversation-fetch every *interacted reply* (to pull ancestors). Superseded by `fetch_conversations.py has_parent`; kept for reference. |
 | `download_media.py` | Download every referenced image, video poster, low-res mp4, and author avatar into `~/twitter-archive/media/`. Skips existing files (safe to re-run). |
 | `build_archive.py` | Render `~/twitter-archive/index.html`: per-collection tabs, each saved tweet shown inside its real ancestor chain + replies, media served from local files (CDN fallback). |
