@@ -80,7 +80,7 @@ uv run python fetch_conversations.py SELECTOR [SELECTOR ...]
 - `tweet` `reply` `bookmark` `like` `repost` — every tweet in that collection
   (→ pulls the reply tree below it)
 
-Progress is checkpointed to `conversations_done.txt`; re-running skips completed
+Progress is checkpointed to `conversations_done.txt` (next to the DB); re-running skips completed
 focal tweets, so an interrupted/throttled run just resumes.
 
 ## Gotchas

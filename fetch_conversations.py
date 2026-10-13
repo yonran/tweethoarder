@@ -4,8 +4,8 @@ conversation mode, so tweets by every participant are kept.
 
 Robust + resumable:
   - per-call timeout so one hung network read can't stall the whole batch
-  - records each completed focal id in conversations_done.txt and skips it on
-    re-run (seed this file to avoid redoing work)
+  - records each completed focal id in conversations_done.txt (next to the DB)
+    and skips it on re-run (seed this file to avoid redoing work)
 
 Usage (from repo dir, with TWITTER_AUTH_TOKEN / TWITTER_CT0 / TWITTER_TWID set):
     uv run python fetch_conversations.py SELECTOR [SELECTOR ...]
@@ -28,7 +28,7 @@ from pathlib import Path
 from tweethoarder.cli.thread import fetch_thread_async
 
 DB = Path.home() / ".local/share/tweethoarder/tweethoarder.db"
-DONE_FILE = Path(__file__).with_name("conversations_done.txt")
+DONE_FILE = DB.with_name("conversations_done.txt")  # beside the DB, not the (maybe read-only) script
 DELAY_S = 0.8
 PER_CALL_TIMEOUT = 30.0
 
