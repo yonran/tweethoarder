@@ -156,8 +156,17 @@ TweetHoarder automatically extracts cookies from your browser. Priority order:
 
 1. **Environment variables**: `TWITTER_AUTH_TOKEN`, `TWITTER_CT0`, `TWITTER_TWID`
 2. **Config file**: `~/.config/tweethoarder/config.toml`
-3. **Firefox**: Auto-detect from `~/.mozilla/firefox/*/cookies.sqlite`
-4. **Chrome**: Auto-detect with keyring decryption
+3. **Browsers**, in `[auth] cookie_sources` order (default `["firefox", "chrome"]`):
+   - **Firefox**: Auto-detect from `~/.mozilla/firefox/*/cookies.sqlite`
+   - **Chrome** (Linux `~/.config/google-chrome`, macOS
+     `~/Library/Application Support/Google/Chrome`; profile from
+     `[auth] chrome_profile`, default `Default`): decrypted with the GNOME
+     keyring key on Linux, or the "Chrome Safe Storage" Keychain item on macOS
+     (read via `/usr/bin/security`; click **Always Allow** once and unattended
+     runs work)
+
+Reading the browser on every run (rather than pasting cookies into the config
+file) means logging in to x.com again is all it takes when the session expires.
 
 ### Manual Cookie Setup
 
@@ -221,6 +230,7 @@ Config file location: `~/.config/tweethoarder/config.toml`
 ```toml
 [auth]
 cookie_sources = ["firefox", "chrome"]  # Priority order
+chrome_profile = "Default"              # Chrome profile directory name
 
 [sync]
 default_tweet_count = 100
