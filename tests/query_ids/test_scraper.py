@@ -1,6 +1,20 @@
 """Tests for query ID scraper."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
 import pytest
+
+
+@contextmanager
+def _scraper_uses(mock_client: Any) -> Iterator[None]:
+    """refresh_query_ids opens its own HTML client; route it to mock_client."""
+    cm = AsyncMock()
+    cm.__aenter__.return_value = mock_client
+    with patch("tweethoarder.query_ids.scraper.httpx.AsyncClient", return_value=cm):
+        yield
 
 
 def test_extract_bundle_urls_from_html() -> None:
@@ -114,6 +128,7 @@ async def test_refresh_query_ids_fetches_pages_and_extracts_ids() -> None:
     # Create mock responses
     discovery_response = AsyncMock()
     discovery_response.text = discovery_html
+    discovery_response.status_code = 200
     discovery_response.raise_for_status = AsyncMock()
 
     bundle_response = AsyncMock()
@@ -122,7 +137,8 @@ async def test_refresh_query_ids_fetches_pages_and_extracts_ids() -> None:
 
     mock_client.get.side_effect = [discovery_response, bundle_response]
 
-    result = await refresh_query_ids(mock_client, targets={"Bookmarks", "Likes"})
+    with _scraper_uses(mock_client):
+        result = await refresh_query_ids(mock_client, targets={"Bookmarks", "Likes"})
 
     assert result["Bookmarks"] == "new_bookmarks_id"
     assert result["Likes"] == "new_likes_id"
@@ -152,6 +168,7 @@ async def test_refresh_query_ids_tries_multiple_bundles() -> None:
 
     discovery_response = AsyncMock()
     discovery_response.text = discovery_html
+    discovery_response.status_code = 200
 
     bundle1_response = AsyncMock()
     bundle1_response.text = bundle1_js
@@ -161,7 +178,8 @@ async def test_refresh_query_ids_tries_multiple_bundles() -> None:
 
     mock_client.get.side_effect = [discovery_response, bundle1_response, bundle2_response]
 
-    result = await refresh_query_ids(mock_client, targets={"Bookmarks", "Likes"})
+    with _scraper_uses(mock_client):
+        result = await refresh_query_ids(mock_client, targets={"Bookmarks", "Likes"})
 
     assert result["Bookmarks"] == "bookmarks_id"
     assert result["Likes"] == "likes_id"
@@ -192,6 +210,7 @@ async def test_refresh_query_ids_defaults_to_all_target_operations() -> None:
 
     discovery_response = AsyncMock()
     discovery_response.text = discovery_html
+    discovery_response.status_code = 200
 
     bundle_response = AsyncMock()
     bundle_response.text = bundle_js
@@ -199,7 +218,8 @@ async def test_refresh_query_ids_defaults_to_all_target_operations() -> None:
     mock_client.get.side_effect = [discovery_response, bundle_response]
 
     # Call without specifying targets - should use default
-    result = await refresh_query_ids(mock_client)
+    with _scraper_uses(mock_client):
+        result = await refresh_query_ids(mock_client)
 
     # Should find all target operations
     assert len(result) == len(TARGET_QUERY_ID_OPERATIONS)

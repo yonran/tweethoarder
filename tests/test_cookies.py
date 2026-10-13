@@ -226,3 +226,34 @@ def test_resolve_cookies_from_chrome_when_firefox_fails(
 
     assert cookies["auth_token"] == "chrome_auth_token"
     assert cookies["ct0"] == "chrome_ct0"
+
+
+def test_resolve_cookies_honors_cookie_sources_and_chrome_profile(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """[auth] cookie_sources = ["chrome"] skips Firefox; chrome_profile picks the profile."""
+    from tweethoarder.auth.cookies import resolve_cookies
+
+    monkeypatch.delenv("TWITTER_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TWITTER_CT0", raising=False)
+    config_dir = tmp_path / "config"
+    (config_dir / "tweethoarder").mkdir(parents=True)
+    (config_dir / "tweethoarder" / "config.toml").write_text(
+        '[auth]\ncookie_sources = ["chrome"]\nchrome_profile = "Profile 2"\n'
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
+
+    firefox_dir = tmp_path / ".mozilla" / "firefox" / "abc.default"
+    firefox_dir.mkdir(parents=True)
+    _create_firefox_cookies_db(
+        firefox_dir / "cookies.sqlite", [("auth_token", "stale_ff"), ("ct0", "stale_ff_ct0")]
+    )
+    chrome_dir = tmp_path / ".config" / "google-chrome" / "Profile 2"
+    chrome_dir.mkdir(parents=True)
+    _create_chrome_cookies_db(
+        chrome_dir / "Cookies", [("auth_token", "chrome_auth"), ("ct0", "chrome_ct0")]
+    )
+
+    cookies = resolve_cookies(home_dir=tmp_path)
+
+    assert cookies == {"auth_token": "chrome_auth", "ct0": "chrome_ct0"}

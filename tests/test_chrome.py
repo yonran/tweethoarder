@@ -173,3 +173,79 @@ def test_get_chrome_encryption_key_returns_derived_key() -> None:
     # Key should be 16 bytes (AES-128)
     assert key is not None
     assert len(key) == 16
+
+
+def _encrypt_v10(plaintext: bytes, key: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    pad = 16 - len(plaintext) % 16
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
+    return b"v10" + encryptor.update(plaintext + bytes([pad] * pad)) + encryptor.finalize()
+
+
+def test_decrypt_chrome_cookie_strips_domain_hash() -> None:
+    """Chrome 130+ (DB version 24) prefixes SHA256(host_key) to the plaintext."""
+    import hashlib
+
+    from tweethoarder.auth.chrome import decrypt_chrome_cookie
+
+    key = b"k" * 16
+    encrypted = _encrypt_v10(hashlib.sha256(b".x.com").digest() + b"tok", key)
+
+    assert decrypt_chrome_cookie(encrypted, key, has_domain_hash=True) == "tok"
+
+
+def test_extract_chrome_cookies_decrypts_encrypted_x_cookies(tmp_path: Path) -> None:
+    """Encrypted values (macOS) are decrypted; other hosts are ignored."""
+    import hashlib
+
+    from tweethoarder.auth.chrome import extract_chrome_cookies
+
+    key = b"k" * 16
+    db_path = tmp_path / "Cookies"
+    _create_test_chrome_cookies_db(db_path, [("ct0", "other-site", ".example.com")])
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+    conn.execute("INSERT INTO meta VALUES ('version', '24')")
+    for name, value in [("auth_token", b"secret_auth"), ("ct0", b"secret_ct0")]:
+        conn.execute(
+            "INSERT INTO cookies SELECT creation_utc, '.x.com', top_frame_site_key, ?, '', ?, "
+            "path, expires_utc, is_secure, is_httponly, last_access_utc, has_expires, "
+            "is_persistent, priority, samesite, source_scheme, source_port, last_update_utc, "
+            "source_type, has_cross_site_ancestor FROM cookies LIMIT 1",
+            (name, _encrypt_v10(hashlib.sha256(b".x.com").digest() + value, key)),
+        )
+    conn.commit()
+    conn.close()
+
+    assert extract_chrome_cookies(db_path) == {}
+    assert extract_chrome_cookies(db_path, key) == {
+        "auth_token": "secret_auth",
+        "ct0": "secret_ct0",
+    }
+
+
+def test_find_chrome_cookies_db_finds_macos_profile(tmp_path: Path) -> None:
+    """Should find Cookies in the macOS Chrome user data dir."""
+    from tweethoarder.auth.chrome import find_chrome_cookies_db
+
+    profile_dir = tmp_path / "Library" / "Application Support" / "Google" / "Chrome" / "Profile 1"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "Cookies").touch()
+
+    assert find_chrome_cookies_db(tmp_path, profile="Profile 1") == profile_dir / "Cookies"
+
+
+def test_get_chrome_encryption_key_macos_uses_security_cli() -> None:
+    """Key comes from `security find-generic-password` with 1003 PBKDF2 iterations."""
+    import subprocess
+    from unittest.mock import patch
+
+    from tweethoarder.auth.chrome import _derive_key, get_chrome_encryption_key_macos
+
+    done = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"pw\n")
+    with patch("subprocess.run", return_value=done) as run:
+        key = get_chrome_encryption_key_macos()
+
+    assert run.call_args.args[0][0] == "/usr/bin/security"
+    assert key == _derive_key(b"pw", iterations=1003)

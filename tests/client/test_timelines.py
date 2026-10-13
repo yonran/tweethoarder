@@ -1610,7 +1610,7 @@ def test_parse_home_timeline_response_extracts_tweets() -> None:
         }
     }
 
-    entries, _cursor = parse_home_timeline_response(response)
+    entries, _cursor_top, _cursor_bottom = parse_home_timeline_response(response)
 
     assert len(entries) == 1
     assert entries[0]["tweet"]["rest_id"] == "123"
@@ -1644,7 +1644,7 @@ def test_parse_home_timeline_response_extracts_cursor() -> None:
         }
     }
 
-    _tweets, cursor = parse_home_timeline_response(response)
+    _tweets, _cursor_top, cursor = parse_home_timeline_response(response)
 
     assert cursor == "next_cursor_value"
 

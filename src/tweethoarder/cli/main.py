@@ -54,11 +54,10 @@ def user(
     import json
     from typing import Any
 
-    import httpx
-
     from tweethoarder.auth.cookies import resolve_cookies
     from tweethoarder.client.base import TwitterClient
     from tweethoarder.client.timelines import fetch_user_by_screen_name
+    from tweethoarder.query_ids.healing import make_api_client
     from tweethoarder.query_ids.store import QueryIdStore, get_query_id_with_fallback
 
     async def run() -> dict[str, Any]:
@@ -66,7 +65,7 @@ def user(
         tc = TwitterClient(cookies)
         store = QueryIdStore(get_config_dir() / "query-ids-cache.json")
         query_id = get_query_id_with_fallback(store, "UserByScreenName")
-        async with httpx.AsyncClient(headers=tc.get_base_headers(), timeout=30) as client:
+        async with make_api_client(tc.get_base_headers(), timeout=30) as client:
             data: dict[str, Any] = await fetch_user_by_screen_name(client, query_id, screen_name)
             return data
 

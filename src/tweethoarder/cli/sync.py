@@ -27,6 +27,7 @@ from tweethoarder.client.timelines import (
     parse_likes_response,
 )
 from tweethoarder.config import get_config_dir
+from tweethoarder.query_ids.healing import make_api_client
 from tweethoarder.query_ids.scraper import refresh_query_ids
 from tweethoarder.query_ids.store import QueryIdStore, get_query_id_with_fallback
 from tweethoarder.storage.checkpoint import SyncCheckpoint
@@ -322,7 +323,7 @@ async def sync_likes_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
 
         async def refresh_and_get_likes_id() -> str:
             """Refresh query IDs and return the new Likes ID."""
@@ -483,7 +484,7 @@ async def sync_bookmarks_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
 
         async def refresh_and_get_bookmarks_id() -> str:
             """Refresh query IDs and return the new Bookmarks ID."""
@@ -648,7 +649,7 @@ async def sync_tweets_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
         while synced_count < count and not hit_duplicate:
             response = await fetch_user_tweets_page(
                 http_client,
@@ -797,7 +798,7 @@ async def sync_reposts_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
         while synced_count < count and not hit_duplicate:
             response = await fetch_user_tweets_page(
                 http_client,
@@ -954,7 +955,7 @@ async def sync_replies_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
         while synced_count < count and not hit_duplicate:
             response = await fetch_user_tweets_page(
                 http_client,
@@ -1134,7 +1135,7 @@ async def sync_posts_async(
 
     hit_duplicate = False
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
         while (tweets_count + reposts_count) < count and not hit_duplicate:
             response = await fetch_user_tweets_page(
                 http_client,
@@ -1256,7 +1257,7 @@ async def sync_feed_async(
     saved = checkpoint.load("feed")
     start_cursor: str | None = None if (full or saved is None) else saved.cursor
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
 
         async def refresh_and_get_home_timeline_id() -> str:
             """Refresh query IDs and return the new HomeLatestTimeline ID."""
@@ -1413,7 +1414,7 @@ async def sync_list_async(
     synced_count = 0
     headers = client.get_base_headers()
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
 
         async def refresh_and_get_list_id() -> str:
             new_ids: dict[str, str] = await refresh_query_ids(

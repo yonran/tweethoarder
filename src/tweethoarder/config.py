@@ -30,6 +30,7 @@ class AuthConfig:
     """Authentication-related configuration."""
 
     cookie_sources: list[str]
+    chrome_profile: str | None = None  # Chrome profile dir name; None = "Default"
 
 
 @dataclass
@@ -61,6 +62,7 @@ def load_config(path: Path) -> Config:
     auth_data = data.get("auth", {})
     auth_config = AuthConfig(
         cookie_sources=auth_data.get("cookie_sources", default_cookie_sources),
+        chrome_profile=auth_data.get("chrome_profile"),
     )
 
     return Config(sync=sync_config, auth=auth_config)

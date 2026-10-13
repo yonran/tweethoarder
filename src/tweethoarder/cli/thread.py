@@ -9,6 +9,7 @@ import httpx
 from tweethoarder.auth.cookies import resolve_cookies
 from tweethoarder.client.base import TwitterClient
 from tweethoarder.config import get_config_dir
+from tweethoarder.query_ids.healing import make_api_client
 from tweethoarder.query_ids.store import get_query_id_with_fallback
 
 
@@ -61,7 +62,7 @@ async def fetch_thread_async(
     headers = client.get_base_headers()
     tweet_count = 0
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
+    async with make_api_client(headers) as http_client:
         response = await fetch_tweet_detail_with_retry(http_client, query_id, tweet_id)
         tweets = parse_tweet_detail_response(response)
         author_id = get_focal_tweet_author_id(response, tweet_id)

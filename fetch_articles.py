@@ -27,13 +27,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
 
 from tweethoarder.auth.cookies import resolve_cookies
 from tweethoarder.client.base import TwitterClient
 from tweethoarder.client.features import build_tweet_detail_features
 from tweethoarder.client.timelines import TWITTER_API_BASE, fetch_single_page
 from tweethoarder.config import get_config_dir
+from tweethoarder.query_ids.healing import make_api_client
 from tweethoarder.query_ids.store import QueryIdStore, get_query_id_with_fallback
 
 DB = Path.home() / ".local/share/tweethoarder/tweethoarder.db"
@@ -56,7 +56,11 @@ CREATE TABLE IF NOT EXISTS articles (
 
 def article_tweet_ids(con: sqlite3.Connection, coll_types: list[str], refetch: bool) -> list[str]:
     ph = ",".join("?" for _ in coll_types)
-    skip = "" if refetch else "AND t.id NOT IN (SELECT tweet_id FROM articles WHERE plain_text IS NOT NULL)"
+    skip = (
+        ""
+        if refetch
+        else "AND t.id NOT IN (SELECT tweet_id FROM articles WHERE plain_text IS NOT NULL)"
+    )
     return [
         r[0]
         for r in con.execute(
@@ -134,16 +138,22 @@ async def main() -> int:
     print(f"selectors={coll_types}  targets={len(targets)}", flush=True)
 
     client = TwitterClient(cookies=resolve_cookies())
-    query_id = get_query_id_with_fallback(QueryIdStore(get_config_dir() / "query-ids-cache.json"), "TweetDetail")
+    query_id = get_query_id_with_fallback(
+        QueryIdStore(get_config_dir() / "query-ids-cache.json"), "TweetDetail"
+    )
     saved = errors = 0
-    async with httpx.AsyncClient(headers=client.get_base_headers(), timeout=PER_CALL_TIMEOUT) as http:
+    async with make_api_client(client.get_base_headers(), timeout=PER_CALL_TIMEOUT) as http:
         for i, tid in enumerate(targets, 1):
             try:
-                resp = await asyncio.wait_for(fetch_single_page(http, build_url(query_id, tid)), PER_CALL_TIMEOUT)
+                resp = await asyncio.wait_for(
+                    fetch_single_page(http, build_url(query_id, tid)), PER_CALL_TIMEOUT
+                )
                 # A quote tweet of an article carries the article on the quoted tweet.
                 art = find_article(resp, tid)
                 if not art:
-                    row = con.execute("SELECT quoted_tweet_id FROM tweets WHERE id = ?", (tid,)).fetchone()
+                    row = con.execute(
+                        "SELECT quoted_tweet_id FROM tweets WHERE id = ?", (tid,)
+                    ).fetchone()
                     if row and row[0]:
                         art = find_article(resp, row[0])
                 if not art:
@@ -166,8 +176,11 @@ async def main() -> int:
                 )
                 con.commit()
                 saved += 1
-                print(f"[{i}/{len(targets)}] {tid} -> {art.get('title')!r} ({len(body or '')} chars)", flush=True)
-            except Exception as e:  # noqa: BLE001 - keep going; resumable
+                print(
+                    f"[{i}/{len(targets)}] {tid} -> {art.get('title')!r} ({len(body or '')} chars)",
+                    flush=True,
+                )
+            except Exception as e:
                 errors += 1
                 print(f"[{i}/{len(targets)}] {tid} -> ERROR {type(e).__name__}: {e}", flush=True)
             await asyncio.sleep(DELAY_S)

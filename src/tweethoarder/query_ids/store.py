@@ -49,13 +49,19 @@ class QueryIdStore:
         pass
 
     def save(self, ids: dict[str, str]) -> None:
-        """Save query IDs to cache file."""
+        """Merge query IDs into the cache file (other operations' IDs are kept)."""
         from .constants import DEFAULT_TTL_SECONDS
 
+        merged: dict[str, str] = {}
+        if self._cache_path.exists():
+            existing = json.loads(self._cache_path.read_text()).get("ids", {})
+            if isinstance(existing, dict):
+                merged.update(existing)
+        merged.update(ids)
         data = {
             "fetched_at": datetime.now(UTC).isoformat(),
             "ttl_seconds": DEFAULT_TTL_SECONDS,
-            "ids": ids,
+            "ids": merged,
         }
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(json.dumps(data))
