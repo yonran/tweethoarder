@@ -57,3 +57,9 @@ def _make_tweet(
 def make_tweet() -> Any:
     """Fixture that provides the make_tweet factory function."""
     return _make_tweet
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep cookie resolution from reading the developer's real macOS Keychain."""
+    monkeypatch.setattr("tweethoarder.auth.cookies.read_keychain_cookies", lambda: {})

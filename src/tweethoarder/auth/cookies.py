@@ -10,7 +10,10 @@ from tweethoarder.auth.chrome import (
     find_chrome_cookies_db,
 )
 from tweethoarder.auth.firefox import extract_firefox_cookies, find_firefox_cookies_db
+from tweethoarder.auth.keychain import read_keychain_cookies
 from tweethoarder.config import get_config_dir
+
+DEFAULT_COOKIE_SOURCES = ["keychain", "firefox", "chrome"]
 
 
 class CookieError(Exception):
@@ -45,10 +48,12 @@ def resolve_cookies(home_dir: Path | None = None) -> dict[str, str]:
 
     if home_dir is None:
         home_dir = Path.home()
-    sources = auth_data.get("cookie_sources", ["firefox", "chrome"])
+    sources = auth_data.get("cookie_sources", DEFAULT_COOKIE_SOURCES)
     chrome_profile = auth_data.get("chrome_profile")
     for source in sources if isinstance(sources, list) else []:
-        if source == "firefox":
+        if source == "keychain":
+            cookies = read_keychain_cookies()
+        elif source == "firefox":
             cookies = _firefox_cookies(home_dir)
         elif source == "chrome":
             cookies = _chrome_cookies(

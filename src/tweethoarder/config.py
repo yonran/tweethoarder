@@ -43,7 +43,7 @@ class Config:
 
 def load_config(path: Path) -> Config:
     """Load configuration from TOML file, with defaults for missing values."""
-    default_cookie_sources = ["firefox", "chrome"]
+    default_cookie_sources = ["keychain", "firefox", "chrome"]
 
     if not path.exists():
         return Config(

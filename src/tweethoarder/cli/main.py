@@ -179,6 +179,52 @@ def refresh_ids_command() -> None:
     typer.echo(f"Refreshed {len(ids)} query IDs.")
 
 
+@app.command(name="save-cookies")
+def save_cookies_command(
+    source: str = typer.Option(
+        "config",
+        "--from",
+        help="Where to read the X cookies: config (config.toml [auth]), env, chrome, firefox.",
+    ),
+    chrome_profile: str | None = typer.Option(
+        None, "--chrome-profile", help="Chrome profile directory (default: Default)."
+    ),
+) -> None:
+    """Store the X session cookies in the macOS Keychain for unattended runs.
+
+    --from chrome asks macOS for the "Chrome Safe Storage" key (a Keychain
+    prompt); run it while you're at the computer, and click Allow, not Always
+    Allow: only this one read needs it.
+    """
+    import os
+    import tomllib
+    from pathlib import Path
+
+    from tweethoarder.auth.cookies import _chrome_cookies, _firefox_cookies
+    from tweethoarder.auth.keychain import COOKIE_NAMES, store_keychain_cookies
+
+    if source == "config":
+        path = get_config_dir() / "config.toml"
+        auth = tomllib.loads(path.read_text()).get("auth", {}) if path.exists() else {}
+        cookies = {k: auth[k] for k in COOKIE_NAMES if isinstance(auth.get(k), str) and auth[k]}
+    elif source == "env":
+        env = {"auth_token": "TWITTER_AUTH_TOKEN", "ct0": "TWITTER_CT0", "twid": "TWITTER_TWID"}
+        cookies = {k: os.environ[v] for k, v in env.items() if os.environ.get(v)}
+    elif source == "chrome":
+        cookies = _chrome_cookies(Path.home(), chrome_profile)
+    elif source == "firefox":
+        cookies = _firefox_cookies(Path.home())
+    else:
+        typer.echo(f"Unknown source: {source!r}", err=True)
+        raise typer.Exit(2)
+
+    if not (cookies.get("auth_token") and cookies.get("ct0")):
+        typer.echo(f"No auth_token/ct0 found in {source}.", err=True)
+        raise typer.Exit(1)
+    store_keychain_cookies(cookies)
+    typer.echo(f"Saved {', '.join(k for k in COOKIE_NAMES if k in cookies)} to the Keychain.")
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,

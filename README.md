@@ -156,17 +156,37 @@ TweetHoarder automatically extracts cookies from your browser. Priority order:
 
 1. **Environment variables**: `TWITTER_AUTH_TOKEN`, `TWITTER_CT0`, `TWITTER_TWID`
 2. **Config file**: `~/.config/tweethoarder/config.toml`
-3. **Browsers**, in `[auth] cookie_sources` order (default `["firefox", "chrome"]`):
+3. **Cookie sources**, in `[auth] cookie_sources` order (default
+   `["keychain", "firefox", "chrome"]`):
+   - **Keychain** (macOS): the X cookies alone, stored under service
+     `tweethoarder` by `tweethoarder save-cookies`. Recommended for unattended
+     runs: no prompt, and nothing else in your browser is exposed.
    - **Firefox**: Auto-detect from `~/.mozilla/firefox/*/cookies.sqlite`
    - **Chrome** (Linux `~/.config/google-chrome`, macOS
      `~/Library/Application Support/Google/Chrome`; profile from
      `[auth] chrome_profile`, default `Default`): decrypted with the GNOME
      keyring key on Linux, or the "Chrome Safe Storage" Keychain item on macOS
-     (read via `/usr/bin/security`; click **Always Allow** once and unattended
-     runs work)
 
-Reading the browser on every run (rather than pasting cookies into the config
-file) means logging in to x.com again is all it takes when the session expires.
+### macOS: unattended runs
+
+Chrome's "Chrome Safe Storage" key decrypts *every* cookie in the profile, so
+don't grant it **Always Allow** just for this. Instead copy the X cookies into
+their own Keychain items once, and read only those:
+
+```bash
+tweethoarder save-cookies --from chrome   # one prompt for Chrome's key: click Allow
+# or: --from config / --from env / --from firefox
+```
+
+```toml
+# ~/.config/tweethoarder/config.toml
+[auth]
+cookie_sources = ["keychain"]   # fail instead of prompting for Chrome's key
+```
+
+Re-run `save-cookies` when X expires the session (requests start failing with
+401/403). The login keychain must be unlocked, which it is while you're logged
+in unless it's set to lock on sleep.
 
 ### Manual Cookie Setup
 
@@ -229,7 +249,7 @@ Config file location: `~/.config/tweethoarder/config.toml`
 
 ```toml
 [auth]
-cookie_sources = ["firefox", "chrome"]  # Priority order
+cookie_sources = ["keychain", "firefox", "chrome"]  # Priority order
 chrome_profile = "Default"              # Chrome profile directory name
 
 [sync]
